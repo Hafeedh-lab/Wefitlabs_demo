@@ -1,4 +1,4 @@
-import Anthropic from '@anthropic-ai/sdk';
+import { VertexAI } from '@google-cloud/vertexai';
 import { randomUUID } from 'crypto';
 import {
   GenerationRequest,
@@ -6,85 +6,14 @@ import {
   QuestGenerationOutputSchema,
 } from '../schemas/quest.schema.js';
 
-const anthropic = new Anthropic();
+// Initialize Vertex AI
+const project = process.env.GOOGLE_CLOUD_PROJECT_ID;
+const location = process.env.GOOGLE_CLOUD_LOCATION || 'us-central1';
 
-// Tool definition for structured output
-const printQuestTool: Anthropic.Tool = {
-  name: 'print_quest',
-  description: 'Output the generated fitness quest in the required JSON format',
-  input_schema: {
-    type: 'object' as const,
-    properties: {
-      title: {
-        type: 'string',
-        description: 'Catchy 3-6 word title for the quest',
-      },
-      narrative: {
-        type: 'string',
-        description: '2-3 engaging sentences setting up the quest story',
-      },
-      objectives: {
-        type: 'array',
-        description: 'List of measurable objectives for the quest',
-        items: {
-          type: 'object',
-          properties: {
-            description: {
-              type: 'string',
-              description: 'Clear action to complete',
-            },
-            metric: {
-              type: 'string',
-              enum: ['steps', 'minutes', 'distance', 'photo', 'checkin'],
-              description: 'Type of measurement for this objective',
-            },
-            target: {
-              type: 'number',
-              description: 'Numeric goal for this objective',
-            },
-            xpReward: {
-              type: 'number',
-              description: 'XP earned on completing this objective',
-            },
-          },
-          required: ['description', 'metric', 'target', 'xpReward'],
-        },
-      },
-      totalXP: {
-        type: 'number',
-        description: 'Total XP reward (sum of all objective XP rewards)',
-      },
-      coinReward: {
-        type: 'number',
-        description: 'Coin reward (approximately 10% of totalXP)',
-      },
-      difficulty: {
-        type: 'string',
-        enum: ['beginner', 'intermediate', 'advanced'],
-        description: 'Difficulty level matching user fitness level',
-      },
-      estimatedDuration: {
-        type: 'number',
-        description: 'Estimated completion time in minutes',
-      },
-      tags: {
-        type: 'array',
-        items: { type: 'string' },
-        description: 'Relevant searchable tags for the quest',
-      },
-    },
-    required: [
-      'title',
-      'narrative',
-      'objectives',
-      'totalXP',
-      'coinReward',
-      'difficulty',
-      'estimatedDuration',
-      'tags',
-    ],
-  },
-};
+const vertexAI = new VertexAI({
+  project: project || 'undefined',
+  location: location,
+});
 
 // Style-specific system prompts
 const stylePrompts: Record<GenerationRequest['questStyle'], string> = {
@@ -110,6 +39,11 @@ const xpRanges: Record<GenerationRequest['fitnessLevel'], { min: number; max: nu
 };
 
 export async function generateQuest(request: GenerationRequest): Promise<Quest> {
+  // Ensure Project ID is set
+  if (!project) {
+    throw new Error('GOOGLE_CLOUD_PROJECT_ID is not set in environment variables');
+  }
+
   const stylePrompt = stylePrompts[request.questStyle];
   const xpRange = xpRanges[request.fitnessLevel];
 
@@ -135,7 +69,27 @@ Quest Design Principles:
 4. Local Flavor: Reference specific neighborhoods, landmarks, or cultural elements when location is provided
 5. Reward Psychology: XP should feel earned (${xpRange.min}-${xpRange.max} XP range for ${request.fitnessLevel} level)
 
-Coin rewards should be approximately 10% of total XP.`;
+Coin rewards should be approximately 10% of total XP.
+
+IMPORTANT: You must respond with ONLY valid JSON, no markdown, no code blocks, no explanation.
+The JSON must match this exact structure:
+{
+  "title": "string (catchy 3-6 word title)",
+  "narrative": "string (2-3 engaging sentences)",
+  "objectives": [
+    {
+      "description": "string (clear action)",
+      "metric": "steps" | "minutes" | "distance" | "photo" | "checkin",
+      "target": number,
+      "xpReward": number
+    }
+  ],
+  "totalXP": number (sum of all objective XP),
+  "coinReward": number (approx 10% of totalXP),
+  "difficulty": "beginner" | "intermediate" | "advanced",
+  "estimatedDuration": number (minutes),
+  "tags": ["string"]
+}`;
 
   const userPrompt = `Generate a fitness quest with these parameters:
 
@@ -145,33 +99,59 @@ Coin rewards should be approximately 10% of total XP.`;
 - Quest Style: ${request.questStyle.replace('_', ' ')}
 - Target Duration: ${request.duration} minutes
 
-Create an engaging quest that fits these criteria. Use the print_quest tool to output your quest.`;
+Create an engaging quest that fits these criteria. Respond with ONLY the JSON object, nothing else.`;
 
-  const response = await anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514',
-    max_tokens: 1024,
-    system: systemPrompt,
-    tools: [printQuestTool],
-    tool_choice: { type: 'tool', name: 'print_quest' },
-    messages: [
+  // Use Vertex AI Model
+  const model = vertexAI.getGenerativeModel({ model: 'gemini-1.5-flash-001' });
+
+  const result = await model.generateContent({
+    contents: [
       {
         role: 'user',
-        content: userPrompt,
+        parts: [{ text: `${systemPrompt}\n\n${userPrompt}` }],
       },
     ],
+    generationConfig: {
+      temperature: 0.8,
+      maxOutputTokens: 1024,
+    },
   });
 
-  // Extract tool use from response
-  const toolUseBlock = response.content.find(
-    (block): block is Anthropic.ToolUseBlock => block.type === 'tool_use'
-  );
+  const response = result.response;
+  // Vertex AI response structure is slightly different, but .text() helper usually exists on the result object in some SDK versions,
+  // but simpler to access via candidates.
+  // Actually, @google-cloud/vertexai returns a GenerateContentResponse which has candidates.
+  // Let's use the standard way to extract text.
+  
+  const text = response.candidates?.[0].content.parts[0].text;
 
-  if (!toolUseBlock || toolUseBlock.name !== 'print_quest') {
-    throw new Error('AI failed to generate quest using the expected tool format');
+  if (!text) {
+     throw new Error('No content generated from Vertex AI');
   }
 
-  // Validate and parse the tool input
-  const parseResult = QuestGenerationOutputSchema.safeParse(toolUseBlock.input);
+  // Clean up the response - remove markdown code blocks if present
+  let jsonText = text.trim();
+  if (jsonText.startsWith('```json')) {
+    jsonText = jsonText.slice(7);
+  } else if (jsonText.startsWith('```')) {
+    jsonText = jsonText.slice(3);
+  }
+  if (jsonText.endsWith('```')) {
+    jsonText = jsonText.slice(0, -3);
+  }
+  jsonText = jsonText.trim();
+
+  // Parse the JSON response
+  let questData;
+  try {
+    questData = JSON.parse(jsonText);
+  } catch {
+    console.error('Failed to parse AI response:', text);
+    throw new Error('AI failed to generate valid JSON response');
+  }
+
+  // Validate and parse the response
+  const parseResult = QuestGenerationOutputSchema.safeParse(questData);
 
   if (!parseResult.success) {
     console.error('Quest validation failed:', parseResult.error.issues);
