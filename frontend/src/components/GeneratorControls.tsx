@@ -1,11 +1,13 @@
-import { useActionState, useState } from 'react';
+import { useActionState, useState, useEffect } from 'react';
 import { Loader2 } from 'lucide-react';
 import type { Quest, GenerationRequest } from '../types/quest';
-import { generateQuest } from '../services/questApi';
+import { generateQuest, QuestApiError } from '../services/questApi';
+import { ErrorAlert } from './ErrorAlert';
 
 interface ActionState {
   quest: Quest | null;
   error: string | null;
+  errorTitle: string | null;
 }
 
 const INTEREST_OPTIONS = [
@@ -27,9 +29,10 @@ const FITNESS_LEVELS = [
 
 interface GeneratorControlsProps {
   onQuestGenerated: (quests: Quest[]) => void;
+  onLoadingChange?: (isLoading: boolean) => void;
 }
 
-export function GeneratorControls({ onQuestGenerated }: GeneratorControlsProps) {
+export function GeneratorControls({ onQuestGenerated, onLoadingChange }: GeneratorControlsProps) {
   const [selectedInterests, setSelectedInterests] = useState<Set<string>>(new Set());
   const [duration, setDuration] = useState(30);
 
@@ -51,7 +54,11 @@ export function GeneratorControls({ onQuestGenerated }: GeneratorControlsProps) 
   ): Promise<ActionState> {
     try {
       if (selectedInterests.size === 0) {
-        return { quest: null, error: 'Please select at least one interest' };
+        return {
+          quest: null,
+          error: 'Please select at least one interest to generate personalized quests.',
+          errorTitle: 'Missing Information',
+        };
       }
 
       const baseRequest = {
@@ -78,18 +85,30 @@ export function GeneratorControls({ onQuestGenerated }: GeneratorControlsProps) 
       );
 
       onQuestGenerated(quests);
-      // We return the first quest just to satisfy the type, though the parent handles the state now
-      return { quest: quests[0], error: null };
+      return { quest: quests[0], error: null, errorTitle: null };
     } catch (err) {
+      if (err instanceof QuestApiError) {
+        return {
+          quest: null,
+          error: err.message,
+          errorTitle: err.isNetworkError ? 'Connection Error' : 'Generation Failed',
+        };
+      }
       const message = err instanceof Error ? err.message : 'Failed to generate quests';
-      return { quest: null, error: message };
+      return { quest: null, error: message, errorTitle: 'Error' };
     }
   }
 
   const [state, formAction, isPending] = useActionState(submitAction, {
     quest: null,
     error: null,
+    errorTitle: null,
   });
+
+  // Notify parent about loading state changes
+  useEffect(() => {
+    onLoadingChange?.(isPending);
+  }, [isPending, onLoadingChange]);
 
   return (
     <form action={formAction} className="bg-white rounded-xl shadow-lg p-6 space-y-6">
@@ -199,9 +218,10 @@ export function GeneratorControls({ onQuestGenerated }: GeneratorControlsProps) 
 
       {/* Error Message */}
       {state.error && (
-        <div className="bg-red-50 text-red-600 px-4 py-3 rounded-lg text-sm">
-          {state.error}
-        </div>
+        <ErrorAlert
+          title={state.errorTitle || 'Error'}
+          message={state.error}
+        />
       )}
 
       {/* Submit Button */}

@@ -1,10 +1,12 @@
-import { Trophy, Clock, Coins, Target, MapPin } from 'lucide-react';
+import { Trophy, Clock, Coins, Target, MapPin, ChevronRight } from 'lucide-react';
 import type { Quest } from '../types/quest';
 import type { Ref } from 'react';
 
 interface QuestCardProps {
   quest: Quest;
   ref?: Ref<HTMLDivElement>;
+  onClick?: () => void;
+  index?: number;
 }
 
 const difficultyColors = {
@@ -21,11 +23,14 @@ const metricLabels = {
   checkin: 'check-ins',
 } as const;
 
-export function QuestCard({ quest, ref }: QuestCardProps) {
+export function QuestCard({ quest, ref, onClick, index = 0 }: QuestCardProps) {
+  const staggerClass = `stagger-${Math.min(index + 1, 5)}`;
+
   return (
     <div
       ref={ref}
-      className="bg-white rounded-xl shadow-lg overflow-hidden border border-gray-100"
+      onClick={onClick}
+      className={`bg-white rounded-xl shadow-lg overflow-hidden border border-gray-100 cursor-pointer transition-all duration-300 hover:shadow-xl hover:scale-[1.02] hover:border-indigo-200 animate-fade-in-up animate-fill-both ${staggerClass}`}
     >
       {/* Header */}
       <div className="bg-gradient-to-r from-indigo-600 to-indigo-500 px-6 py-4">
@@ -109,18 +114,24 @@ export function QuestCard({ quest, ref }: QuestCardProps) {
         </div>
 
         {/* Rewards */}
-        <div className="flex items-center gap-4 pt-4 border-t border-gray-100">
-          <div className="flex items-center gap-2">
-            <Trophy className="w-5 h-5 text-indigo-600" />
-            <span className="font-semibold text-indigo-600">
-              {quest.totalXP} XP
-            </span>
+        <div className="flex items-center justify-between pt-4 border-t border-gray-100">
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2">
+              <Trophy className="w-5 h-5 text-indigo-600" />
+              <span className="font-semibold text-indigo-600">
+                {quest.totalXP} XP
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <Coins className="w-5 h-5 text-amber-500" />
+              <span className="font-semibold text-amber-500">
+                {quest.coinReward} Coins
+              </span>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            <Coins className="w-5 h-5 text-amber-500" />
-            <span className="font-semibold text-amber-500">
-              {quest.coinReward} Coins
-            </span>
+          <div className="flex items-center gap-1 text-indigo-600 font-medium text-sm">
+            View Details
+            <ChevronRight className="w-4 h-4" />
           </div>
         </div>
       </div>
